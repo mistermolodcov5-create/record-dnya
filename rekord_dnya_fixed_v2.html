@@ -1,0 +1,1082 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<!--
+  ═══════════════════════════════════════════════════════════════════
+  «РЕКОРД ДНЯ» — рабочий прототип VK Mini App (один файл, без сервера)
+  ═══════════════════════════════════════════════════════════════════
+
+  ▶ КАК ЗАПУСТИТЬ ЛОКАЛЬНО
+  1. Сохраните этот файл как index.html
+  2. Вариант А: просто откройте его двойным кликом в браузере — всё работает.
+     Вариант Б (рекомендуется): поднимите локальный сервер, например:
+        npx serve .            → http://localhost:3000
+        python -m http.server 8080  → http://localhost:8080
+     На http-протоколе localStorage и VK Bridge работают стабильнее.
+
+  ▶ ШАГИ ДЛЯ ПУБЛИКАЦИИ В VK MINI APPS
+  1. Зайдите на https://dev.vk.com → создайте приложение типа «Mini App».
+  2. Разместите index.html на любом HTTPS-хостинге
+     (VK Hosting, GitHub Pages, Netlify, свой сервер).
+  3. В настройках приложения укажите URL этого файла.
+  4. VK Bridge подключается как экспериментальная интеграция; работу методов
+     нужно проверить внутри опубликованного тестового VK Mini App.
+  5. Реклама и общий рейтинг не подключены. Локальная статистика хранится
+     только в браузере/на устройстве и не синхронизируется между игроками.
+  6. Протестируйте в мобильном VK (режим разработки), затем отправьте на модерацию.
+
+  ▶ ЗАМЕЧАНИЯ ПО БЕЗОПАСНОСТИ И ИНТЕГРАЦИЯМ
+  • В клиентском коде НЕТ и не должно быть секретных ключей —
+    они хранятся только на бэкенде.
+  • Аналитика: локальные события в localStorage; отправка в VK Bridge — экспериментальная.
+  • Реклама: объект Ads — заглушки-хуки (showRewarded / showInterstitial).
+    Прототип НЕ имитирует показы и НЕ выдаёт награду «за рекламу».
+  • Рейтинг друзей и выплаты не имитируются; «Вызвать друга» = реальный шаринг
+    ссылки (VKWebAppShare / navigator.share / clipboard).
+-->
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#6a5cff">
+<title>Рекорд дня — VK Mini App</title>
+
+<!-- Шрифт Rubik (fontsource CDN, кириллица) -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/fontsource/css/rubik@latest/cyrillic-400-normal.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/fontsource/css/rubik@latest/cyrillic-600-normal.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/fontsource/css/rubik@latest/cyrillic-700-normal.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/fontsource/css/rubik@latest/cyrillic-800-normal.css">
+
+<style>
+  :root{
+    --bg1:#6a5cff; --bg2:#a855f7;
+    --card:#ffffff; --ink:#1d1b33; --muted:#74718f;
+    --primary:#6c5cff; --primary2:#9b5cff;
+    --accent:#ffc93c; --ok:#22c55e; --bad:#ff5470;
+    --radius:24px;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{
+    font-family:'Rubik',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    background:linear-gradient(160deg,var(--bg1) 0%,var(--bg2) 60%,#c86dd7 100%);
+    background-attachment:fixed;
+    color:var(--ink);
+    overflow:hidden;
+    user-select:none;-webkit-user-select:none;
+    touch-action:manipulation;
+  }
+  /* декоративные круги на фоне */
+  body::before,body::after{
+    content:'';position:fixed;border-radius:50%;pointer-events:none;
+    background:rgba(255,255,255,.09);filter:blur(2px);
+  }
+  body::before{width:340px;height:340px;top:-120px;left:-100px}
+  body::after{width:280px;height:280px;bottom:-100px;right:-80px}
+
+  #app{
+    position:relative;z-index:1;
+    max-width:480px;margin:0 auto;
+    height:100vh;height:100dvh;
+    display:flex;flex-direction:column;
+    padding:calc(14px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) calc(14px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
+  }
+
+  /* ===== Экраны ===== */
+  .screen{display:none;flex:1;flex-direction:column;min-height:0;overflow-y:auto;scrollbar-width:none}
+  .screen::-webkit-scrollbar{display:none}
+  .screen.active{display:flex;animation:fadeIn .28s ease}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+  .card{
+    background:var(--card);border-radius:var(--radius);
+    box-shadow:0 14px 40px rgba(28,16,70,.28);
+    padding:22px 20px;
+  }
+
+  /* ===== Кнопки ===== */
+  .btn{
+    display:flex;align-items:center;justify-content:center;gap:8px;
+    width:100%;min-height:58px;border:none;border-radius:18px;
+    font-family:inherit;font-size:1.05rem;font-weight:700;color:#fff;
+    cursor:pointer;transition:transform .12s ease,box-shadow .12s ease,opacity .2s;
+    text-align:center;padding:10px 18px;
+  }
+  .btn:active{transform:scale(.96)}
+  .btn:disabled{opacity:.55;cursor:default;transform:none}
+  .btn-primary{background:linear-gradient(135deg,var(--primary),var(--primary2));box-shadow:0 8px 22px rgba(108,92,255,.45)}
+  .btn-accent{background:linear-gradient(135deg,#ffb43c,#ff7a3c);box-shadow:0 8px 22px rgba(255,140,60,.4);color:#3a2500}
+  .btn-outline{background:rgba(255,255,255,.14);border:2px solid rgba(255,255,255,.55);color:#fff;backdrop-filter:blur(4px)}
+  .btn-ghost{background:transparent;color:rgba(255,255,255,.9);min-height:46px;font-weight:600;box-shadow:none}
+  .btn-lg{font-size:1.15rem;min-height:62px}
+
+  /* ===== Стартовый экран ===== */
+  #scrStart{justify-content:center;gap:14px}
+  .start-card{text-align:center;animation:popIn .35s ease}
+  @keyframes popIn{0%{transform:scale(.92);opacity:0}100%{transform:scale(1);opacity:1}}
+  .logo{
+    width:86px;height:86px;margin:0 auto 10px;border-radius:26px;
+    background:linear-gradient(135deg,#ffe9a8,#ffc93c);
+    display:flex;align-items:center;justify-content:center;font-size:2.8rem;
+    box-shadow:0 10px 24px rgba(255,180,60,.45);
+    animation:bounce 2.4s ease-in-out infinite;
+  }
+  @keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
+  h1{font-size:1.85rem;font-weight:800;letter-spacing:.5px}
+  .tagline{color:var(--muted);margin:6px 0 16px;font-size:.98rem}
+  .rules{list-style:none;text-align:left;margin:0 auto 20px;max-width:320px;display:flex;flex-direction:column;gap:9px}
+  .rules li{
+    display:flex;align-items:center;gap:10px;font-size:.95rem;font-weight:500;
+    background:#f4f3ff;border-radius:14px;padding:10px 14px;color:#3d3a5c;
+  }
+  .rules .ic{font-size:1.2rem;width:26px;text-align:center;flex-shrink:0}
+  .start-btns{display:flex;flex-direction:column;gap:12px}
+  /* Контрастная кнопка ежедневного испытания на белой карточке */
+  #btnDaily{
+    background:linear-gradient(135deg,#2878e8,#5c4bd8);
+    border:0;
+    color:#fff;
+    box-shadow:0 8px 20px rgba(67,88,210,.28);
+  }
+  #btnDaily .chip{
+    background:rgba(255,255,255,.2);
+    color:#fff;
+    border:1px solid rgba(255,255,255,.3);
+  }
+  #btnDaily:disabled{opacity:.65}
+  .chip{
+    font-size:.72rem;font-weight:700;padding:3px 9px;border-radius:999px;
+    background:rgba(255,255,255,.22);white-space:nowrap;
+  }
+  .chip.done{background:rgba(46,213,115,.3)}
+  .best-row{margin-top:16px;color:var(--muted);font-size:.95rem}
+  .best-row b{color:#3d3a5c;font-size:1.1rem}
+  .hello{color:#fff;font-weight:600;text-align:center;text-shadow:0 2px 8px rgba(0,0,0,.2);min-height:22px}
+
+  /* ===== Игровой экран ===== */
+  #scrGame{gap:12px}
+  .hud{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 2px}
+  .pill{
+    background:rgba(255,255,255,.16);backdrop-filter:blur(6px);
+    color:#fff;border-radius:999px;padding:8px 14px;font-weight:700;font-size:.95rem;
+    display:flex;align-items:center;gap:6px;min-width:88px;justify-content:center;
+  }
+  .pill.timer-pill{font-size:1.25rem;font-variant-numeric:tabular-nums;min-width:76px}
+  .pill.timer-pill.danger{background:var(--bad);animation:pulse .6s ease infinite}
+  @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.08)}}
+  .pill.streak{min-width:70px;opacity:0;transition:opacity .25s}
+  .pill.streak.show{opacity:1}
+
+  .timerbar{height:8px;background:rgba(255,255,255,.22);border-radius:999px;overflow:hidden}
+  .timerbar>div{height:100%;width:100%;border-radius:999px;background:linear-gradient(90deg,#7CFFB2,#22c55e);transition:width .12s linear,background .3s}
+  .timerbar.danger>div{background:linear-gradient(90deg,#ffb3c0,var(--bad))}
+
+  .q-card{flex-shrink:0;text-align:center;position:relative;overflow:hidden;animation:popIn .25s ease}
+  .q-type{
+    display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;
+    color:var(--primary);background:#efedff;border-radius:999px;padding:5px 13px;margin-bottom:10px;
+  }
+  .q-text{font-size:1.18rem;font-weight:700;margin-bottom:14px;color:#2a2745}
+  #qPrompt{min-height:96px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px}
+
+  .stroop-word{font-size:2.7rem;font-weight:800;letter-spacing:2px;line-height:1.15}
+  .math-expr{font-size:2.3rem;font-weight:800;color:#2a2745}
+  .seq{font-size:1.7rem;font-weight:700;color:#2a2745;letter-spacing:1px}
+  .seq b{color:var(--primary);font-size:2rem}
+  .count-grid{font-size:1.9rem;line-height:1.5;letter-spacing:6px;text-align:center}
+  .odd-hint{font-size:.95rem;color:var(--muted);font-weight:500}
+  .mem-grid{display:grid;grid-template-columns:repeat(2,74px);gap:10px}
+  .mem-cell{
+    width:74px;height:74px;border-radius:16px;background:#f1efff;border:2px solid #e3dfff;
+    display:flex;align-items:center;justify-content:center;
+    font-size:1.1rem;font-weight:700;color:#b3aee0;position:relative;
+  }
+  .mem-cell.star{background:#fff7dd;border-color:#ffd84d}
+  .star-ico{position:absolute;font-size:2rem;animation:popIn .3s ease}
+  .mem-hint{font-size:.9rem;color:var(--muted);font-weight:600}
+
+  .opts{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:2px;padding-bottom:8px}
+  .opt{
+    min-height:88px;border-radius:20px;border:3px solid transparent;
+    background:var(--card);box-shadow:0 8px 20px rgba(28,16,70,.22);
+    font-family:inherit;font-size:1.25rem;font-weight:700;color:#2a2745;
+    cursor:pointer;display:flex;align-items:center;justify-content:center;
+    transition:transform .12s ease,border-color .2s,background .2s;
+    padding:10px;word-break:keep-all;text-align:center;
+    animation:optIn .3s ease backwards;
+  }
+  .opt:nth-child(1){animation-delay:.02s}.opt:nth-child(2){animation-delay:.06s}
+  .opt:nth-child(3){animation-delay:.1s}.opt:nth-child(4){animation-delay:.14s}
+  @keyframes optIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+  .opt.big{font-size:2.4rem}
+  .opt:active{transform:scale(.95)}
+  .opt:disabled{cursor:default}
+  .opt.correct{background:#e6fbef;border-color:var(--ok);color:#0d7a37;animation:popGood .35s ease}
+  .opt.wrong{background:#ffe9ed;border-color:var(--bad);color:#c22745;animation:shake .4s ease}
+  .opt.dim{opacity:.55}
+  @keyframes popGood{0%{transform:scale(1)}45%{transform:scale(1.07)}100%{transform:scale(1)}}
+  @keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-7px)}50%{transform:translateX(7px)}75%{transform:translateX(-4px)}}
+
+  #floats{position:fixed;inset:0;pointer-events:none;z-index:60}
+  .float-txt{
+    position:absolute;left:50%;top:34%;transform:translateX(-50%);
+    font-size:1.7rem;font-weight:800;padding:8px 18px;border-radius:16px;
+    animation:floatUp .85s ease forwards;white-space:nowrap;
+    box-shadow:0 8px 24px rgba(0,0,0,.22);
+  }
+  .float-txt.good{color:#0d7a37;background:#d8ffe7}
+  .float-txt.bad{color:#fff;background:var(--bad)}
+  @keyframes floatUp{0%{opacity:0;transform:translate(-50%,14px) scale(.8)}25%{opacity:1;transform:translate(-50%,0) scale(1.05)}100%{opacity:0;transform:translate(-50%,-52px) scale(1)}}
+
+  /* ===== Экран результата ===== */
+  #scrResult{justify-content:flex-start;gap:14px;padding-bottom:24px;}
+  .result-card{text-align:center;animation:popIn .35s ease;padding:26px 20px;flex:0 0 auto;width:100%;box-sizing:border-box;}
+  .res-emoji{font-size:3.6rem;margin-bottom:4px;animation:bounce 2s ease-in-out infinite}
+  .result-card h2{font-size:1.5rem;font-weight:800;margin-bottom:6px}
+  .res-sub{color:var(--muted);font-size:.95rem;margin-bottom:14px}
+  .new-record{
+    display:none;margin:0 auto 14px;width:fit-content;
+    background:linear-gradient(135deg,#ffd84d,#ff9a3c);color:#5a3200;
+    font-weight:800;font-size:.9rem;border-radius:999px;padding:8px 18px;
+    box-shadow:0 8px 20px rgba(255,160,60,.45);animation:pulse 1s ease infinite;
+  }
+  .new-record.show{display:block}
+  .res-score{font-size:3.6rem;font-weight:800;line-height:1;color:var(--primary)}
+  .res-score small{display:block;font-size:.95rem;color:var(--muted);font-weight:600;margin-top:6px}
+  .res-stats{display:flex;justify-content:center;gap:10px;margin:20px 0}
+  .res-stats>div{
+    flex:1;max-width:120px;background:#f4f3ff;border-radius:16px;padding:12px 6px;
+    display:flex;flex-direction:column;gap:3px;
+  }
+  .res-stats b{font-size:1.35rem;color:#2a2745}
+  .res-stats span{font-size:.72rem;color:var(--muted);font-weight:600}
+  .result-btns{display:flex;flex-direction:column;gap:11px}
+  /* Кнопка меню находится на белой карточке результата: делаем её контрастной. */
+  .result-card .btn-ghost{color:var(--primary);background:#f2efff;border:1px solid #ded8ff;min-height:50px}
+  .result-card .btn-ghost:hover{background:#e8e2ff}
+
+  #confetti{position:fixed;inset:0;pointer-events:none;z-index:70;overflow:hidden}
+  .confetti-piece{position:absolute;top:-40px;font-size:1.4rem;animation:confFall linear forwards}
+  @keyframes confFall{to{transform:translateY(110vh) rotate(340deg);opacity:.6}}
+
+  /* ===== Прочее ===== */
+  #soundBtn{
+    position:fixed;top:calc(10px + env(safe-area-inset-top));right:calc(10px + env(safe-area-inset-right));
+    z-index:80;width:44px;height:44px;border-radius:50%;border:none;cursor:pointer;
+    background:rgba(255,255,255,.18);backdrop-filter:blur(6px);font-size:1.2rem;
+    display:flex;align-items:center;justify-content:center;transition:transform .12s;
+  }
+  #soundBtn:active{transform:scale(.9)}
+  #toast{
+    position:fixed;left:50%;bottom:calc(26px + env(safe-area-inset-bottom));transform:translate(-50%,20px);
+    background:rgba(24,20,50,.92);color:#fff;padding:12px 20px;border-radius:16px;
+    font-size:.92rem;font-weight:600;opacity:0;pointer-events:none;transition:all .3s ease;
+    z-index:90;max-width:88vw;text-align:center;
+  }
+  #toast.show{opacity:1;transform:translate(-50%,0)}
+
+  .local-dashboard{margin-top:18px;padding-top:14px;border-top:1px solid #eeeaf8;text-align:left}
+  .local-dashboard-title{font-size:.82rem;font-weight:800;color:var(--ink);margin-bottom:9px}
+  .local-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+  .local-stats>div{background:#f6f4ff;border-radius:12px;padding:9px 5px;text-align:center;min-width:0}
+  .local-stats b{display:block;font-size:1.1rem;color:var(--primary);overflow-wrap:anywhere}
+  .local-stats span{display:block;font-size:.65rem;color:var(--muted);margin-top:3px}
+  .local-ranking-title{margin-top:13px}
+  .local-ranking{padding-left:23px;font-size:.8rem;color:var(--muted);line-height:1.7}
+  .local-ranking li{padding-left:2px;overflow-wrap:anywhere}
+  .local-note{font-size:.68rem;line-height:1.35;color:var(--muted);margin-top:7px}
+
+  /* ===== Адаптация для компьютера ===== */
+  @media (min-width:600px){
+    body{display:flex;align-items:center;justify-content:center;overflow:auto}
+    #app{
+      height:min(860px,96vh);border-radius:34px;overflow:hidden;
+      box-shadow:0 40px 90px rgba(20,10,60,.5);
+      border:1px solid rgba(255,255,255,.25);
+      background:rgba(255,255,255,.05);
+    }
+    h1{font-size:2rem}
+    .opt:hover{transform:translateY(-2px)}
+    .btn:hover{transform:translateY(-2px)}
+  }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <button id="soundBtn" type="button" aria-label="Звук">🔊</button>
+
+  <!-- ================= СТАРТОВЫЙ ЭКРАН ================= -->
+  <section id="scrStart" class="screen active">
+    <div class="hello" id="hello"></div>
+    <div class="card start-card">
+      <div class="logo">🏆</div>
+      <h1>Рекорд дня</h1>
+      <p class="tagline">Успей ответить как можно больше за 30 секунд!</p>
+      <ul class="rules">
+        <li><span class="ic">⏱</span> Раунд длится 30 секунд</li>
+        <li><span class="ic">✅</span> Верный ответ — очки, серия даёт бонус</li>
+        <li><span class="ic">❌</span> Ошибка — минус 2 секунды</li>
+        <li><span class="ic">📅</span> Каждый день — новое испытание</li>
+      </ul>
+      <div class="start-btns">
+        <button id="btnPlay" class="btn btn-primary btn-lg" type="button">▶ Играть</button>
+        <button id="btnDaily" class="btn btn-outline btn-lg" type="button">📅 Испытание дня <span id="dailyChip" class="chip">Новое!</span></button>
+      </div>
+      <div class="best-row">🏅 Мой рекорд: <b id="bestLabel">—</b></div>
+      <div class="local-dashboard" aria-live="polite">
+        <div class="local-dashboard-title">📊 Статистика на этом устройстве</div>
+        <div class="local-stats">
+          <div><b id="localGames">0</b><span>раундов</span></div>
+          <div><b id="localCorrect">0</b><span>верных ответов</span></div>
+          <div><b id="localBest">0</b><span>лучший счёт</span></div>
+        </div>
+        <div class="local-dashboard-title local-ranking-title">🏅 Мои лучшие результаты</div>
+        <ol id="localRanking" class="local-ranking"><li>Сыграй первый раунд</li></ol>
+        <p class="local-note">Событий локальной аналитики: <b id="localEventCount">0</b>. Данные хранятся только в браузере — это не общий рейтинг игроков.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= ИГРОВОЙ ЭКРАН ================= -->
+  <section id="scrGame" class="screen">
+    <div class="hud">
+      <div class="pill" id="hudLeft">⭐ 0</div>
+      <div class="pill timer-pill" id="hudTimer">30</div>
+      <div class="pill streak" id="hudStreak">🔥 x0</div>
+    </div>
+    <div class="timerbar" id="timerBar"><div id="timerFill"></div></div>
+
+    <div class="card q-card" id="qCard">
+      <div class="q-type" id="qType">ЗАДАНИЕ</div>
+      <div class="q-text" id="qText"></div>
+      <div id="qPrompt"></div>
+    </div>
+
+    <div class="opts" id="opts"></div>
+  </section>
+
+  <!-- ================= ЭКРАН РЕЗУЛЬТАТА ================= -->
+  <section id="scrResult" class="screen">
+    <div class="card result-card">
+      <div class="res-emoji" id="resEmoji">🏆</div>
+      <h2 id="resTitle">Раунд окончен!</h2>
+      <p class="res-sub" id="resSub"></p>
+      <div class="new-record" id="resNewRecord">🎉 НОВЫЙ РЕКОРД!</div>
+      <div class="res-score"><span id="resScore">0</span><small id="resScoreLabel">очков</small></div>
+      <div class="res-stats">
+        <div><b id="resStat1">0</b><span id="resStat1Lbl">рекорд</span></div>
+        <div><b id="resStat2">0</b><span>верных</span></div>
+        <div><b id="resStat3">0</b><span id="resStat3Lbl">лучшая серия</span></div>
+      </div>
+      <div class="result-btns">
+        <button id="btnAgain" class="btn btn-primary btn-lg" type="button">🔄 Играть снова</button>
+        <button id="btnShare" class="btn btn-accent btn-lg" type="button">📣 Вызвать друга</button>
+        <button id="btnMenu" class="btn btn-ghost" type="button">🏠 В главное меню</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div id="floats"></div>
+<div id="confetti"></div>
+<div id="toast"></div>
+
+<script>
+'use strict';
+/* ════════════════════════════════════════════════════════════════
+   1. VK BRIDGE — слой интеграции (подключается динамически).
+   В обычном браузере все вызовы безопасно «заглушаются»,
+   поэтому игра работает и без VK.
+   ════════════════════════════════════════════════════════════════ */
+const VKB = {
+  bridge: null,
+  ready: false,
+  init() {
+    return new Promise((resolve) => {
+      const finish = (ok) => { this.ready = ok && !!this.bridge; resolve(this.ready); };
+      const setup = () => {
+        if (window.bridge && typeof window.bridge.send === 'function') {
+          this.bridge = window.bridge;
+          Promise.resolve(this.send('VKWebAppInit', {})).then(() => {
+            this.send('VKWebAppSetViewSettings', { status_bar_style: 'light', action_bar_color: '#6a5cff' });
+            finish(true);
+          }).catch(() => finish(true));
+        } else finish(false);
+      };
+      if (window.bridge) { setup(); return; }
+      const sc = document.createElement('script');
+      sc.src = 'https://unpkg.com/@vkb/bridge/dist/browser.min.js';
+      sc.onload = setup;
+      sc.onerror = () => finish(false);
+      setTimeout(() => { if (!this.ready) finish(false); }, 3000); // не блокируем браузер
+      document.head.appendChild(sc);
+    });
+  },
+  send(method, props = {}) {
+    try { if (this.bridge) return this.bridge.send(method, props); } catch (e) { /* noop */ }
+    return Promise.resolve(null);
+  }
+};
+
+/* Аналитические события: единая точка входа.
+   В VK → VKWebAppTrackEvent, в браузере → console.debug. */
+const KEY_ANALYTICS = 'rd_analytics_v1';
+function trackEvent(name, data = {}) {
+  // Надёжная для прототипа часть аналитики: события сохраняются локально.
+  // Это не серверная аналитика и не общий отчёт по всем игрокам.
+  try {
+    const savedEvents = lsGet(KEY_ANALYTICS, []);
+    const events = Array.isArray(savedEvents) ? savedEvents : [];
+    events.push({ name: String(name), data, at: new Date().toISOString() });
+    lsSet(KEY_ANALYTICS, events.slice(-200));
+  } catch (e) { /* хранилище может быть недоступно */ }
+  // Экспериментальный вызов: совместимость метода/схемы должна быть проверена в VK.
+  if (VKB.ready) {
+    VKB.send('VKWebAppTrackEvent', { event_type: 'custom', event_name: name, custom_params: data });
+  }
+  refreshLocalDashboard();
+}
+
+/* Рекламные интеграции — ЗАГЛУШКИ-ХУКИ.
+   Прототип не имитирует показы и не выдаёт награду «за рекламу».
+   Реальный SDK пока не подключён: вызов не показывает рекламу и не выдаёт награду. */
+const Ads = {
+  showRewarded(onReward) {
+    trackEvent('ad_reward_requested');
+    console.debug('[Ads] Rewarded-видео не подключено (заглушка). Хук награды:', typeof onReward === 'function');
+  },
+  showInterstitial() {
+    trackEvent('ad_interstitial_requested');
+    console.debug('[Ads] Interstitial не подключено (заглушка).');
+  }
+};
+
+/* Хаптика (вибрация) через VK Bridge, в браузере — noop */
+function taptic(type) { VKB.send('VKWebAppTapticNotification', { type }); }
+
+/* ════════════════════════════════════════════════════════════════
+   2. ХРАНИЛИЩЕ (локальный рекорд) — с защитой от ошибок
+   ════════════════════════════════════════════════════════════════ */
+function lsGet(key, def = null) {
+  try { const v = localStorage.getItem(key); return v === null ? def : JSON.parse(v); }
+  catch (e) { return def; }
+}
+function lsSet(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) { /* приватный режим */ }
+}
+const KEY_BEST   = 'rd_best_classic';   // личный рекорд классического раунда
+const KEY_SOUND  = 'rd_sound';
+const KEY_RESULTS = 'rd_local_results_v1';
+
+/* ════════════════════════════════════════════════════════════════
+   3. ЗВУК (WebAudio, без внешних файлов)
+   ════════════════════════════════════════════════════════════════ */
+let audioCtx = null, soundOn = lsGet(KEY_SOUND, true);
+function beep(freq, dur = 0.12, type = 'sine', vol = 0.07, delay = 0) {
+  if (!soundOn) return;
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const t0 = audioCtx.currentTime + delay;
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(t0); o.stop(t0 + dur);
+  } catch (e) { /* noop */ }
+}
+const sfx = {
+  correct() { beep(660, .1); beep(880, .14, 'sine', .07, .09); },
+  wrong()   { beep(190, .22, 'sawtooth', .05); },
+  start()   { beep(520, .09); beep(700, .12, 'sine', .06, .08); },
+  finish()  { beep(520, .12); beep(660, .12, 'sine', .06, .1); beep(880, .2, 'sine', .06, .2); },
+  tick()    { beep(1200, .05, 'square', .02); }
+};
+
+/* ════════════════════════════════════════════════════════════════
+   4. ГЕНЕРАТОРЫ ЗАДАНИЙ (6 типов, детерминированные при наличии rng)
+   ════════════════════════════════════════════════════════════════ */
+function rndInt(rng, min, max) { return Math.floor(rng() * (max - min + 1)) + min; }
+function pick(rng, arr) { return arr[Math.floor(rng() * arr.length)]; }
+function shuffle(rng, arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+/* Детерминированный ГСЧ (mulberry32) — для ежедневного испытания */
+function hashStr(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/* Собираем 4 варианта ответа, перемешиваем, находим индекс правильного */
+function makeOptions(rng, correct, wrongs, big = false) {
+  const items = shuffle(rng, [{ label: String(correct), correct: true }, ...wrongs.map(w => ({ label: String(w), correct: false }))]);
+  return { options: items.map(i => ({ label: i.label, big })), correctIndex: items.findIndex(i => i.correct) };
+}
+/* Уникальные числовые «неправильные» рядом с правильным */
+function wrongNumbers(rng, correct, count, spread = 6) {
+  const out = [], used = new Set([correct]);
+  let guard = 0;
+  while (out.length < count && guard++ < 200) {
+    const v = correct + rndInt(rng, 1, spread) * (rng() < 0.5 ? -1 : 1);
+    if (v > 0 && !used.has(v)) { used.add(v); out.push(v); }
+  }
+  let f = 1;
+  while (out.length < count) { const v = correct + spread + f++; if (!used.has(v)) { used.add(v); out.push(v); } }
+  return out;
+}
+
+const COLORS = [
+  { name: 'Красный',  hex: '#ff4d5e' }, { name: 'Синий',    hex: '#3d6dff' },
+  { name: 'Зелёный',  hex: '#1fae55' }, { name: 'Жёлтый',   hex: '#e8b400' },
+  { name: 'Фиолетовый', hex: '#9b3cff' }, { name: 'Оранжевый', hex: '#ff8420' }
+];
+const ODD_SETS = [
+  { group: ['🍎','🍌','🍇','🍓','🍑','🍉'], odd: ['🥕','🥦','🌽','🍄'] },
+  { group: ['🐶','🐱','🐹','🐰','🦊'],      odd: ['🐔','🦆','🦅','🐧'] },
+  { group: ['⚽','🏀','🎾','🏐','🏈'],      odd: ['🎸','🎺','🥁','🎻'] },
+  { group: ['🚗','🚌','🚕','🚙','🚓'],      odd: ['🚁','✈️','🚀','🛸'] },
+  { group: ['🌲','🌳','🌴','🌵'],           odd: ['🌷','🌹','🌻','🌸'] }
+];
+const COUNT_SETS = [
+  { e: '⭐', n: 'звёзд' }, { e: '🔥', n: 'огоньков' }, { e: '🍓', n: 'клубничек' },
+  { e: '⚽', n: 'мячей' }, { e: '🐝', n: 'пчёлок' }, { e: '💎', n: 'кристаллов' }
+];
+
+const GENERATORS = {
+  /* Тип 1: Струп-тест — внимательность */
+  stroop(rng) {
+    const cols = shuffle(rng, COLORS);
+    const word = cols[0], ink = cols[1];
+    const wrongs = cols.slice(2, 5).map(c => c.name);
+    const o = makeOptions(rng, ink.name, wrongs);
+    return {
+      type: 'stroop', typeLabel: 'Внимательность',
+      q: 'Каким цветом написано слово?',
+      promptHTML: '<div class="stroop-word" style="color:' + ink.hex + '">' + word.name.toUpperCase() + '</div>',
+      options: o.options, correctIndex: o.correctIndex
+    };
+  },
+  /* Тип 2: Лишний предмет — логика */
+  odd(rng) {
+    const set = pick(rng, ODD_SETS);
+    const group = shuffle(rng, set.group).slice(0, 3);
+    const oddOne = pick(rng, set.odd);
+    const o = makeOptions(rng, oddOne, group, true);
+    return {
+      type: 'odd', typeLabel: 'Логика',
+      q: 'Что здесь лишнее?',
+      promptHTML: '<div class="odd-hint">Три связаны общей темой, одно — нет 🤔</div>',
+      options: o.options, correctIndex: o.correctIndex
+    };
+  },
+  /* Тип 3: Счёт — внимательность + скорость */
+  count(rng) {
+    const cs = pick(rng, COUNT_SETS);
+    const n = rndInt(rng, 5, 13);
+    const o = makeOptions(rng, n, wrongNumbers(rng, n, 3, 3));
+    o.options.forEach(op => { op.big = false; });
+    return {
+      type: 'count', typeLabel: 'Счёт',
+      q: 'Сколько ' + cs.n + ' на экране?',
+      promptHTML: '<div class="count-grid">' + Array.from({ length: n }, () => cs.e).join(' ') + '</div>',
+      options: o.options, correctIndex: o.correctIndex
+    };
+  },
+  /* Тип 4: Математика — реакция на вычисление */
+  math(rng) {
+    const op = pick(rng, ['+', '−', '×']);
+    let a, b, res;
+    if (op === '+') { a = rndInt(rng, 10, 49); b = rndInt(rng, 5, 40); res = a + b; }
+    else if (op === '−') { a = rndInt(rng, 20, 60); b = rndInt(rng, 5, a - 1); res = a - b; }
+    else { a = rndInt(rng, 3, 12); b = rndInt(rng, 3, 12); res = a * b; }
+    const o = makeOptions(rng, res, wrongNumbers(rng, res, 3, Math.max(4, Math.round(res * 0.15))));
+    return {
+      type: 'math', typeLabel: 'Математика',
+      q: 'Реши пример как можно быстрее',
+      promptHTML: '<div class="math-expr">' + a + ' ' + op + ' ' + b + ' = ?</div>',
+      options: o.options, correctIndex: o.correctIndex
+    };
+  },
+  /* Тип 5: Последовательность — логика */
+  sequence(rng) {
+    let terms, next;
+    if (rng() < 0.55) {
+      const a0 = rndInt(rng, 2, 9), d = rndInt(rng, 2, 7);
+      terms = [a0, a0 + d, a0 + 2 * d, a0 + 3 * d]; next = a0 + 4 * d;
+    } else {
+      const a0 = pick(rng, [1, 2, 3]), r = pick(rng, [2, 3]);
+      terms = [a0, a0 * r, a0 * r * r, a0 * r * r * r]; next = a0 * Math.pow(r, 4);
+    }
+    const o = makeOptions(rng, next, wrongNumbers(rng, next, 3, Math.max(3, Math.round(next * 0.2))));
+    return {
+      type: 'sequence', typeLabel: 'Последовательность',
+      q: 'Какое число следующее?',
+      promptHTML: '<div class="seq">' + terms.join(', ') + ', <b>?</b></div>',
+      options: o.options, correctIndex: o.correctIndex
+    };
+  },
+  /* Тип 6: Память — запомни расположение звезды */
+  memory(rng) {
+    const ci = rndInt(rng, 0, 3);
+    const reveal = '<div class="mem-grid">' + [0,1,2,3].map(i =>
+      '<div class="mem-cell' + (i === ci ? ' star' : '') + '">' + (i + 1) +
+      (i === ci ? '<span class="star-ico">⭐</span>' : '') + '</div>').join('') +
+      '</div><div class="mem-hint">Запомни, где ⭐…</div>';
+    const hidden = '<div class="mem-grid">' + [0,1,2,3].map(i =>
+      '<div class="mem-cell">' + (i + 1) + '</div>').join('') +
+      '</div><div class="mem-hint">Где была ⭐?</div>';
+    return {
+      type: 'memory', typeLabel: 'Память',
+      q: 'В какой клетке была звезда?',
+      promptHTML: reveal, hiddenHTML: hidden, revealMs: 1600,
+      options: [1,2,3,4].map(n => ({ label: String(n), big: false })),
+      correctIndex: ci
+    };
+  }
+};
+const TYPES = Object.keys(GENERATORS);
+
+/* ════════════════════════════════════════════════════════════════
+   5. СОСТОЯНИЕ ИГРЫ
+   ════════════════════════════════════════════════════════════════ */
+const ROUND_SECONDS = 30;
+const WRONG_PENALTY_MS = 2000;      // штрафное время за ошибку
+const DAILY_COUNT = 5;              // вопросов в испытании дня
+const DAILY_POINTS = 20;            // очков за верный ответ в испытании
+
+const G = {
+  mode: null,           // 'classic' | 'daily'
+  task: null,
+  locked: true,         // защита от двойного нажатия / двойного начисления
+  ended: true,
+  score: 0, streak: 0, bestStreak: 0, correctCount: 0, wrongCount: 0,
+  endTime: 0, tickId: null, delayId: null,
+  dailyTasks: [], dailyIndex: 0,
+  lastScore: 0, lastMode: null
+};
+
+/* DOM */
+const $ = (id) => document.getElementById(id);
+const screens = { start: $('scrStart'), game: $('scrGame'), result: $('scrResult') };
+
+function showScreen(name) {
+  Object.values(screens).forEach(s => s.classList.remove('active'));
+  screens[name].classList.add('active');
+}
+
+/* ════════════════════════════════════════════════════════════════
+   6. ЕЖЕДНЕВНОЕ ИСПЫТАНИЕ (сид = дата устройства)
+   ════════════════════════════════════════════════════════════════ */
+function dateStr(d = new Date()) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function dailyKey() { return 'rd_daily_' + dateStr(); }
+function generateDailyTasks() {
+  const rng = mulberry32(hashStr('record-of-the-day|' + dateStr()));
+  const types = shuffle(rng, TYPES).slice(0, DAILY_COUNT);
+  return types.map(t => GENERATORS[t](rng));
+}
+
+/* ════════════════════════════════════════════════════════════════
+   7. ТАЙМЕР (устойчив к фоновым вкладкам: считаем от timestamps)
+   ════════════════════════════════════════════════════════════════ */
+let lastTickSecond = -1;
+function startTimer(seconds) {
+  G.endTime = Date.now() + seconds * 1000;
+  lastTickSecond = -1;
+  clearInterval(G.tickId);
+  G.tickId = setInterval(tickTimer, 100);
+  tickTimer();
+}
+function tickTimer() {
+  const remMs = Math.max(0, G.endTime - Date.now());
+  const remSec = Math.ceil(remMs / 1000);
+  $('hudTimer').textContent = remSec;
+  const pct = Math.min(100, Math.max(0, remMs / (ROUND_SECONDS * 1000) * 100));
+  $('timerFill').style.width = pct + '%';
+  const danger = remMs <= 6000;
+  $('hudTimer').classList.toggle('danger', danger);
+  $('timerBar').classList.toggle('danger', danger);
+  if (danger && remSec !== lastTickSecond) { lastTickSecond = remSec; sfx.tick(); }
+  if (remMs <= 0) endRound();
+}
+function stopTimer() { clearInterval(G.tickId); G.tickId = null; }
+
+/* ════════════════════════════════════════════════════════════════
+   8. ИГРОВОЙ ЦИКЛ
+   ════════════════════════════════════════════════════════════════ */
+function clearDelays() { clearTimeout(G.delayId); G.delayId = null; }
+
+function startClassic() {
+  G.mode = 'classic'; G.ended = false;
+  G.score = 0; G.streak = 0; G.bestStreak = 0; G.correctCount = 0; G.wrongCount = 0;
+  $('hudLeft').textContent = '⭐ 0';
+  $('hudStreak').classList.remove('show');
+  $('hudTimer').style.display = '';
+  $('timerBar').style.display = '';
+  showScreen('game');
+  sfx.start();
+  trackEvent('game_start', { mode: 'classic' });
+  startTimer(ROUND_SECONDS);
+  nextQuestion();
+}
+
+function startDaily() {
+  if (lsGet(dailyKey())) { toast('Испытание уже пройдено сегодня. Возвращайся завтра! 📅'); return; }
+  G.mode = 'daily'; G.ended = false;
+  G.dailyTasks = generateDailyTasks(); G.dailyIndex = 0;
+  G.score = 0; G.streak = 0; G.bestStreak = 0; G.correctCount = 0; G.wrongCount = 0;
+  $('hudTimer').style.display = 'none';
+  $('timerBar').style.display = 'none';
+  showScreen('game');
+  sfx.start();
+  trackEvent('daily_start', { date: dateStr() });
+  nextQuestion();
+}
+
+function updateHud() {
+  if (G.mode === 'classic') $('hudLeft').textContent = '⭐ ' + G.score;
+  else $('hudLeft').textContent = '📅 ' + (G.dailyIndex + 1) + '/' + DAILY_COUNT;
+  const st = $('hudStreak');
+  if (G.streak >= 2) { st.textContent = '🔥 x' + G.streak; st.classList.add('show'); }
+  else st.classList.remove('show');
+}
+
+function nextQuestion() {
+  clearDelays();
+  if (G.ended) return;
+  if (G.mode === 'daily') {
+    if (G.dailyIndex >= G.dailyTasks.length) { finishDaily(); return; }
+    G.task = G.dailyTasks[G.dailyIndex];
+  } else {
+    G.task = GENERATORS[pick(Math.random, TYPES)](Math.random);
+  }
+  renderQuestion();
+  updateHud();
+}
+
+function renderQuestion() {
+  const t = G.task;
+  $('qCard').style.animation = 'none'; void $('qCard').offsetWidth; $('qCard').style.animation = '';
+  $('qType').textContent = t.typeLabel;
+  $('qText').textContent = t.q;
+  $('qPrompt').innerHTML = t.promptHTML;
+
+  const box = $('opts');
+  box.innerHTML = '';
+  t.options.forEach((op, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'opt' + (op.big ? ' big' : '');
+    b.textContent = op.label;
+    b.addEventListener('click', () => onAnswer(i, b));
+    box.appendChild(b);
+  });
+
+  if (t.type === 'memory') {
+    /* фаза запоминания: кнопки заблокированы, таймер идёт */
+    G.locked = true;
+    setOptionsDisabled(true);
+    G.delayId = setTimeout(() => {
+      if (G.ended) return;
+      $('qPrompt').innerHTML = t.hiddenHTML;
+      G.locked = false;
+      setOptionsDisabled(false);
+      beep(900, .06, 'square', .03);
+    }, t.revealMs || 1600);
+  } else {
+    G.locked = false;
+    setOptionsDisabled(false);
+  }
+}
+
+function setOptionsDisabled(dis) {
+  document.querySelectorAll('#opts .opt').forEach(b => { b.disabled = dis; });
+}
+
+function floatText(txt, cls) {
+  const el = document.createElement('div');
+  el.className = 'float-txt ' + cls;
+  el.textContent = txt;
+  el.style.left = (40 + Math.random() * 20) + '%';
+  $('floats').appendChild(el);
+  setTimeout(() => el.remove(), 900);
+}
+
+/* Обработка ответа — заблокирована до следующего вопроса,
+   что исключает двойное начисление очков. */
+function onAnswer(index, btn) {
+  if (G.locked || G.ended || !G.task) return;
+  G.locked = true;
+  setOptionsDisabled(true);
+
+  const isCorrect = index === G.task.correctIndex;
+  const buttons = document.querySelectorAll('#opts .opt');
+  buttons[G.task.correctIndex].classList.add('correct');
+
+  if (isCorrect) {
+    G.correctCount++;
+    G.streak++;
+    G.bestStreak = Math.max(G.bestStreak, G.streak);
+    const bonus = Math.min(G.streak - 1, 5) * 2;
+    const pts = 10 + bonus;
+    if (G.mode === 'classic') { G.score += pts; floatText('+' + pts, 'good'); }
+    sfx.correct(); taptic('success');
+    trackEvent('answer_correct', { type: G.task.type, mode: G.mode, streak: G.streak });
+  } else {
+    G.wrongCount++;
+    G.streak = 0;
+    btn.classList.add('wrong');
+    buttons.forEach((b, i) => { if (i !== index && i !== G.task.correctIndex) b.classList.add('dim'); });
+    if (G.mode === 'classic' && !G.ended) {
+      G.endTime -= WRONG_PENALTY_MS;              // штраф: отнимаем 2 секунды
+      floatText('−2 сек', 'bad');
+    } else {
+      floatText('Неверно', 'bad');
+    }
+    sfx.wrong(); taptic('error');
+    trackEvent('answer_wrong', { type: G.task.type, mode: G.mode });
+  }
+  updateHud();
+
+  if (G.mode === 'daily') {
+    G.delayId = setTimeout(() => {
+      if (G.ended) return;
+      G.dailyIndex++;
+      nextQuestion();
+    }, 650);
+  } else {
+    G.delayId = setTimeout(() => { if (!G.ended) nextQuestion(); }, 550);
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   9. ОКОНЧАНИЕ РАУНДА И РЕЗУЛЬТАТЫ
+   ════════════════════════════════════════════════════════════════ */
+function recordLocalResult(mode, score, correct) {
+  const savedRows = lsGet(KEY_RESULTS, []);
+  const rows = Array.isArray(savedRows) ? savedRows : [];
+  rows.push({ mode, score: Number(score) || 0, correct: Number(correct) || 0, at: new Date().toISOString() });
+  lsSet(KEY_RESULTS, rows.slice(-50));
+  refreshLocalDashboard();
+}
+
+function refreshLocalDashboard() {
+  const savedRows = lsGet(KEY_RESULTS, []);
+  const rows = Array.isArray(savedRows) ? savedRows : [];
+  const savedEvents = lsGet(KEY_ANALYTICS, []);
+  const eventCount = Array.isArray(savedEvents) ? savedEvents.length : 0;
+  const games = rows.length;
+  const correct = rows.reduce((sum, row) => sum + (Number(row.correct) || 0), 0);
+  const best = rows.reduce((max, row) => Math.max(max, Number(row.score) || 0), 0);
+  const put = (id, value) => { const el = $(id); if (el) el.textContent = String(value); };
+  put('localGames', games); put('localCorrect', correct); put('localBest', best); put('localEventCount', eventCount);
+  const list = $('localRanking');
+  if (!list) return;
+  list.innerHTML = '';
+  const top = rows.slice().sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0)).slice(0, 5);
+  if (!top.length) {
+    const li = document.createElement('li'); li.textContent = 'Сыграй первый раунд'; list.appendChild(li); return;
+  }
+  top.forEach((row) => {
+    const li = document.createElement('li');
+    const when = row.at ? new Date(row.at).toLocaleDateString('ru-RU') : '';
+    li.textContent = `${row.score} очк. · ${row.mode === 'daily' ? 'испытание дня' : 'классика'} · ${when}`;
+    list.appendChild(li);
+  });
+}
+
+function endRound() {
+  if (G.ended || G.mode !== 'classic') return;   // защита от повторного вызова
+  G.ended = true;
+  stopTimer(); clearDelays(); setOptionsDisabled(true);
+  G.lastScore = G.score; G.lastMode = 'classic';
+  recordLocalResult('classic', G.score, G.correctCount);
+
+  const best = lsGet(KEY_BEST, 0);
+  const isNewRecord = G.score > best;
+  if (isNewRecord) lsSet(KEY_BEST, G.score);
+  trackEvent('game_finish', { mode: 'classic', score: G.score, correct: G.correctCount, best_streak: G.bestStreak });
+  if (isNewRecord) trackEvent('new_record', { score: G.score });
+  sfx.finish();
+
+  renderResult({
+    emoji: isNewRecord ? '🥇' : (G.score >= 100 ? '🔥' : '🏁'),
+    title: 'Раунд окончен!',
+    sub: G.score >= 150 ? 'Невероятно! Ты машина внимания 🤖' :
+         G.score >= 80  ? 'Отличный результат! Так держать 💪' :
+                          'Хорошая попытка — рекорд уже близко!',
+    score: G.score, scoreLabel: 'очков',
+    newRecord: isNewRecord,
+    stat1: { v: Math.max(best, G.score), l: 'рекорд' },
+    stat2: { v: G.correctCount, l: 'верных' },
+    stat3: { v: G.bestStreak, l: 'лучшая серия' },
+    showAgain: true
+  });
+  if (isNewRecord) launchConfetti();
+}
+
+function finishDaily() {
+  G.ended = true; clearDelays();
+  const score = G.correctCount * DAILY_POINTS;
+  G.lastScore = score; G.lastMode = 'daily';
+  recordLocalResult('daily', score, G.correctCount);
+  lsSet(dailyKey(), { score, correct: G.correctCount, date: dateStr() });
+  trackEvent('daily_finish', { date: dateStr(), score, correct: G.correctCount });
+  sfx.finish();
+
+  renderResult({
+    emoji: G.correctCount === DAILY_COUNT ? '👑' : (G.correctCount >= 3 ? '🌟' : '📅'),
+    title: 'Испытание дня пройдено!',
+    sub: G.correctCount === DAILY_COUNT ? 'Идеально! Все ответы верные 👏' : 'Завтра будет новое испытание — не пропусти!',
+    score: score, scoreLabel: 'очков',
+    newRecord: false,
+    stat1: { v: G.correctCount + '/' + DAILY_COUNT, l: 'верных' },
+    stat2: { v: G.bestStreak, l: 'серия' },
+    stat3: { v: dateStr().slice(5).replace('-', '.'), l: 'дата' },
+    showAgain: false
+  });
+  if (G.correctCount === DAILY_COUNT) launchConfetti();
+}
+
+function renderResult(cfg) {
+  $('resEmoji').textContent = cfg.emoji;
+  $('resTitle').textContent = cfg.title;
+  $('resSub').textContent = cfg.sub;
+  $('resScore').textContent = cfg.score;
+  $('resScoreLabel').textContent = cfg.scoreLabel;
+  $('resNewRecord').classList.toggle('show', !!cfg.newRecord);
+  $('resStat1').textContent = cfg.stat1.v; $('resStat1Lbl').textContent = cfg.stat1.l;
+  $('resStat2').textContent = cfg.stat2.v;
+  $('resStat3').textContent = cfg.stat3.v; $('resStat3Lbl').textContent = cfg.stat3.l;
+  $('btnAgain').style.display = cfg.showAgain ? '' : 'none';
+  showScreen('result');
+}
+
+function launchConfetti() {
+  const pieces = ['🎉','⭐','🏆','✨','💜','🎊'];
+  const box = $('confetti');
+  box.innerHTML = '';
+  for (let i = 0; i < 34; i++) {
+    const s = document.createElement('span');
+    s.className = 'confetti-piece';
+    s.textContent = pick(Math.random, pieces);
+    s.style.left = Math.random() * 100 + 'vw';
+    s.style.animationDuration = (2 + Math.random() * 2) + 's';
+    s.style.animationDelay = (Math.random() * .8) + 's';
+    s.style.fontSize = (1 + Math.random() * 1.2) + 'rem';
+    box.appendChild(s);
+  }
+  setTimeout(() => { box.innerHTML = ''; }, 5000);
+}
+
+/* ════════════════════════════════════════════════════════════════
+   10. «ВЫЗВАТЬ ДРУГА» — реальный шаринг (без фейковых рейтингов)
+   ════════════════════════════════════════════════════════════════ */
+async function inviteFriend() {
+  trackEvent('share_click', { mode: G.lastMode, score: G.lastScore });
+  const text = 'Я набрал ' + G.lastScore + ' очков в игре «Рекорд дня» 🏆 Попробуй побить мой рекорд!';
+  const link = location.href;
+
+  if (VKB.ready) {
+    try {
+      const res = await VKB.send('VKWebAppShare', { link });
+      if (res) { toast('Отлично! Отправь ссылку другу 📣'); return; }
+    } catch (e) { /* fallback ниже */ }
+  }
+  if (navigator.share) {
+    try { await navigator.share({ title: 'Рекорд дня', text, url: link }); return; }
+    catch (e) { /* отмена или fallback */ }
+  }
+  try {
+    await navigator.clipboard.writeText(text + ' ' + link);
+    toast('Ссылка скопирована — отправь другу! 📋');
+  } catch (e) {
+    toast(text);
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   11. UI-ХЕЛПЕРЫ И СТАРТОВЫЙ ЭКРАН
+   ════════════════════════════════════════════════════════════════ */
+let toastId = null;
+function toast(msg) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastId);
+  toastId = setTimeout(() => el.classList.remove('show'), 2400);
+}
+
+function refreshStart() {
+  const best = lsGet(KEY_BEST, 0);
+  $('bestLabel').textContent = best > 0 ? best + ' очк.' : '—';
+  const rec = lsGet(dailyKey());
+  const chip = $('dailyChip');
+  const btn = $('btnDaily');
+  if (rec) {
+    chip.textContent = '✅ ' + rec.correct + '/' + DAILY_COUNT + ' · ' + rec.score + ' очк.';
+    chip.classList.add('done');
+    btn.disabled = true;
+  } else {
+    chip.textContent = 'Новое!';
+    chip.classList.remove('done');
+    btn.disabled = false;
+  }
+}
+
+function updateSoundBtn() { $('soundBtn').textContent = soundOn ? '🔊' : '🔇'; }
+
+/* ════════════════════════════════════════════════════════════════
+   12. ИНИЦИАЛИЗАЦИЯ
+   ════════════════════════════════════════════════════════════════ */
+async function init() {
+  updateSoundBtn();
+  refreshStart();
+  refreshLocalDashboard();
+  showScreen('start');
+
+  $('btnPlay').addEventListener('click', () => startClassic());
+  $('btnDaily').addEventListener('click', () => startDaily());
+  $('btnAgain').addEventListener('click', () => { trackEvent('replay_click'); startClassic(); });
+  $('btnShare').addEventListener('click', inviteFriend);
+  $('btnMenu').addEventListener('click', () => { refreshStart(); showScreen('start'); });
+  $('soundBtn').addEventListener('click', () => {
+    soundOn = !soundOn; lsSet(KEY_SOUND, soundOn); updateSoundBtn();
+    if (soundOn) beep(700, .08);
+  });
+
+  /* Защита: при возврате на вкладку таймер сам догонит (timestamp-based),
+     а при уходе со страницы чистим интервалы. */
+  window.addEventListener('pagehide', () => { stopTimer(); clearDelays(); });
+
+  /* Подключаем VK Bridge (в браузере просто продолжим без него) */
+  const inVK = await VKB.init();
+  trackEvent('app_open', { platform: inVK ? 'vk' : 'browser' });
+  if (inVK) {
+    try {
+      const user = await VKB.send('VKWebAppGetUserInfo');
+      if (user && user.first_name) $('hello').textContent = 'Привет, ' + user.first_name + '! 👋';
+    } catch (e) { /* noop */ }
+  }
+}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+
+<noscript>Для игры «Рекорд дня» необходимо включить JavaScript.</noscript>
+</body>
+</html>
