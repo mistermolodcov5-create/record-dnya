@@ -394,15 +394,15 @@ const VKB = {
     return new Promise((resolve) => {
       const finish = (ok) => { this.ready = ok && !!this.bridge; resolve(this.ready); };
       const setup = () => {
-        if (window.vkbridge && typeof window.vkbridge.send === 'function') {
-          this.bridge = window.vkbridge;
+        if (window.vkBridge && typeof window.vkBridge.send === 'function') {
+          this.bridge = window.vkBridge;
           Promise.resolve(this.send('VKWebAppInit', {})).then(() => {
             this.send('VKWebAppSetViewSettings', { status_bar_style: 'light', action_bar_color: '#6a5cff' });
             finish(true);
           }).catch(() => finish(true));
         } else finish(false);
       };
-      if (window.vkbridge) { setup(); return; }
+      if (window.vkBridge) { setup(); return; }
       const sc = document.createElement('script');
       sc.src = 'https://unpkg.com/@vkontakte/vk-bridge/dist/browser.min.js';
       sc.onload = setup;
