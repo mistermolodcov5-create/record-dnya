@@ -394,15 +394,15 @@ const VKB = {
     return new Promise((resolve) => {
       const finish = (ok) => { this.ready = ok && !!this.bridge; resolve(this.ready); };
       const setup = () => {
-        if (window.bridge && typeof window.bridge.send === 'function') {
-          this.bridge = window.bridge;
+        if (window.vkbridge && typeof window.vkbridge.send === 'function') {
+          this.bridge = window.vkbridge;
           Promise.resolve(this.send('VKWebAppInit', {})).then(() => {
             this.send('VKWebAppSetViewSettings', { status_bar_style: 'light', action_bar_color: '#6a5cff' });
             finish(true);
           }).catch(() => finish(true));
         } else finish(false);
       };
-      if (window.bridge) { setup(); return; }
+      if (window.vkbridge) { setup(); return; }
       const sc = document.createElement('script');
       sc.src = 'https://unpkg.com/@vkb/bridge/dist/browser.min.js';
       sc.onload = setup;
