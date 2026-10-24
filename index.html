@@ -404,7 +404,7 @@ const VKB = {
       };
       if (window.vkbridge) { setup(); return; }
       const sc = document.createElement('script');
-      sc.src = 'https://unpkg.com/@vkb/bridge/dist/browser.min.js';
+      sc.src = 'https://unpkg.com/@vkontakte/vk-bridge/dist/browser.min.js';
       sc.onload = setup;
       sc.onerror = () => finish(false);
       setTimeout(() => { if (!this.ready) finish(false); }, 3000); // не блокируем браузер
